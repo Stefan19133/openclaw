@@ -144,6 +144,16 @@ export type StoredRenderIncident = {
   details?: Record<string, unknown>;
 };
 
+export type MutedServiceEntry = {
+  serviceId: string;
+  /** If set, only this incident type is muted. Null = all types muted. */
+  incidentType: RenderIncidentType | null;
+  mutedAtMs: number;
+  /** If set, mute expires after this timestamp. Null = permanent until /unmute. */
+  expiresAtMs: number | null;
+  reason?: string;
+};
+
 export type RenderMonitorState = {
   version: 1;
   updatedAtMs: number;
@@ -158,6 +168,8 @@ export type RenderMonitorState = {
     string,
     { count: number; lastIncidentFingerprint?: string; updatedAtMs: number }
   >;
+  /** Muted services: alerts are suppressed but incidents are still recorded. */
+  mutedServices?: MutedServiceEntry[];
 };
 
 export type DetectedRenderIncident = {

@@ -1,8 +1,22 @@
-import type { DetectedRenderIncident, RenderMonitorServiceTarget, RenderMonitorState } from "./types.js";
+import type { DetectedRenderIncident, RenderMonitorServiceTarget } from "./types.js";
+
+const TELEGRAM_MAX_LENGTH = 4096;
 
 function escapeTelegramMarkdown(raw: string): string {
-  // Telegram markdown escaping is complex; use minimal escaping to keep it readable.
-  return raw.replaceAll("_", "\\_").replaceAll("*", "\\*").replaceAll("`", "\\`");
+  // Telegram legacy Markdown requires escaping these characters to prevent
+  // formatting corruption: _ * ` [ ]
+  return raw
+    .replaceAll("\\", "\\\\")
+    .replaceAll("_", "\\_")
+    .replaceAll("*", "\\*")
+    .replaceAll("`", "\\`")
+    .replaceAll("[", "\\[");
+}
+
+export function truncateForTelegram(text: string, maxLen = TELEGRAM_MAX_LENGTH): string {
+  if (text.length <= maxLen) return text;
+  const suffix = "\n\n… (truncated)";
+  return text.slice(0, maxLen - suffix.length) + suffix;
 }
 
 export function buildIncidentAlertText(params: {
@@ -14,14 +28,16 @@ export function buildIncidentAlertText(params: {
   const { incident, service } = params;
   const env = service.environment ? ` (${service.environment})` : "";
   const name = service.name ? ` · ${service.name}` : "";
-  const detailsJson =
-    incident.details && Object.keys(incident.details).length
-      ? `\n\nDetails: ${escapeTelegramMarkdown(JSON.stringify(incident.details))}`
-      : "";
+  const detailsRaw = incident.details && Object.keys(incident.details).length
+    ? JSON.stringify(incident.details)
+    : null;
+  const detailsJson = detailsRaw
+    ? `\n\nDetails: ${escapeTelegramMarkdown(detailsRaw)}`
+    : "";
   return [
-    `🚨 Render incident: *${incident.incidentType}*`,
-    `Service: *${service.serviceId}*${name}${env}`,
-    `Incident ID: \`${params.incidentId}\``,
+    `🚨 Render incident: *${escapeTelegramMarkdown(incident.incidentType)}*`,
+    `Service: *${escapeTelegramMarkdown(service.serviceId)}*${escapeTelegramMarkdown(name)}${escapeTelegramMarkdown(env)}`,
+    `Incident ID: \`${escapeTelegramMarkdown(params.incidentId)}\``,
     `When: ${new Date(incident.createdAtMs).toISOString()}`,
     ``,
     escapeTelegramMarkdown(incident.summary),

@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { RenderMonitorState, StoredRenderIncident, RenderIncidentType } from "./types.js";
+import type {
+  MutedServiceEntry,
+  RenderIncidentType,
+  RenderMonitorState,
+  StoredRenderIncident,
+} from "./types.js";
 
 const STATE_REL_ROOT = path.join("plugins", "render-monitor");
 
@@ -59,6 +64,7 @@ export async function loadRenderMonitorState(stateDir: string): Promise<RenderMo
       incidentsById: parsed.incidentsById,
       incidentIdByFingerprint: parsed.incidentIdByFingerprint,
       serviceErrorStreakByServiceId: parsed.serviceErrorStreakByServiceId ?? {},
+      mutedServices: Array.isArray(parsed.mutedServices) ? parsed.mutedServices : [],
     };
   } catch {
     return {
@@ -222,6 +228,84 @@ export function upsertInvestigation(params: {
     updatedAtMs: Date.now(),
     incidentsById: { ...params.state.incidentsById, [params.incidentId]: next },
   };
+}
+
+// ── Mute / Unmute ──────────────────────────────────────────────────
+
+export function isServiceMuted(params: {
+  state: RenderMonitorState;
+  serviceId: string;
+  incidentType: RenderIncidentType;
+  nowMs: number;
+}): boolean {
+  const entries = params.state.mutedServices ?? [];
+  return entries.some((m) => {
+    if (m.serviceId !== params.serviceId) return false;
+    if (m.incidentType !== null && m.incidentType !== params.incidentType) return false;
+    if (m.expiresAtMs !== null && params.nowMs > m.expiresAtMs) return false;
+    return true;
+  });
+}
+
+export function muteService(params: {
+  state: RenderMonitorState;
+  serviceId: string;
+  incidentType: RenderIncidentType | null;
+  durationMs: number | null;
+  reason?: string;
+  nowMs?: number;
+}): RenderMonitorState {
+  const nowMs = params.nowMs ?? Date.now();
+  const existing = (params.state.mutedServices ?? []).filter(
+    (m) => !(m.serviceId === params.serviceId && m.incidentType === params.incidentType),
+  );
+  const entry: MutedServiceEntry = {
+    serviceId: params.serviceId,
+    incidentType: params.incidentType,
+    mutedAtMs: nowMs,
+    expiresAtMs: params.durationMs != null ? nowMs + params.durationMs : null,
+    reason: params.reason,
+  };
+  return {
+    ...params.state,
+    updatedAtMs: nowMs,
+    mutedServices: [...existing, entry],
+  };
+}
+
+export function unmuteService(params: {
+  state: RenderMonitorState;
+  serviceId: string;
+  incidentType: RenderIncidentType | null;
+}): { state: RenderMonitorState; changed: boolean } {
+  const before = params.state.mutedServices ?? [];
+  const after = before.filter(
+    (m) => !(m.serviceId === params.serviceId &&
+      (params.incidentType === null || m.incidentType === params.incidentType)),
+  );
+  if (after.length === before.length) {
+    return { state: params.state, changed: false };
+  }
+  return {
+    state: { ...params.state, updatedAtMs: Date.now(), mutedServices: after },
+    changed: true,
+  };
+}
+
+export function pruneExpiredMutes(params: {
+  state: RenderMonitorState;
+  nowMs: number;
+}): RenderMonitorState {
+  const entries = params.state.mutedServices ?? [];
+  const kept = entries.filter((m) => m.expiresAtMs === null || params.nowMs <= m.expiresAtMs);
+  if (kept.length === entries.length) return params.state;
+  return { ...params.state, updatedAtMs: params.nowMs, mutedServices: kept };
+}
+
+export function listMutes(state: RenderMonitorState, nowMs: number): MutedServiceEntry[] {
+  return (state.mutedServices ?? []).filter(
+    (m) => m.expiresAtMs === null || nowMs <= m.expiresAtMs,
+  );
 }
 
 export function updateInvestigationProposal(params: {

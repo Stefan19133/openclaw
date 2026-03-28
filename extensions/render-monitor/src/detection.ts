@@ -44,7 +44,9 @@ export async function probeHttpAvailability(url: string, opts: {
       redirect: "follow",
       signal: controller.signal,
     });
-    return res.ok || (res.status >= 300 && res.status < 400);
+    // Any HTTP response (including 404, 403, etc.) means the server is alive.
+    // Only 5xx indicates a real server-side problem.
+    return res.status < 500;
   } finally {
     clearTimeout(timeout);
   }

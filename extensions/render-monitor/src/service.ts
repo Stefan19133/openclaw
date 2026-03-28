@@ -9,14 +9,16 @@ import { RenderClient } from "./render-client.js";
 import { detectRenderIncidents } from "./detection.js";
 import {
   computeIncidentFingerprint,
+  isServiceMuted,
   loadRenderMonitorState,
+  pruneExpiredMutes,
   saveRenderMonitorState,
   markIncidentAlerted,
   resolveIncidentById,
   shouldDedupeIncident,
   upsertIncident,
 } from "./state-store.js";
-import { buildIncidentAlertText, resolveRenderDashboardLinks } from "./alerting.js";
+import { buildIncidentAlertText, resolveRenderDashboardLinks, truncateForTelegram } from "./alerting.js";
 
 async function sendTelegramAlert(params: {
   api: OpenClawPluginApi;
@@ -36,8 +38,7 @@ function pruneState(params: {
   nowMs: number;
   dedupeTtlMinutes: number;
 }): RenderMonitorState {
-  // Keep incidents only for a window, to avoid unbounded growth.
-  const maxAgeMs = params.dedupeTtlMinutes * 6 * 60_000;
+  const maxAgeMs = params.dedupeTtlMinutes * 60_000;
   const kept: Record<string, StoredRenderIncident> = {};
   for (const [id, incident] of Object.entries(params.state.incidentsById)) {
     if (params.nowMs - incident.lastDetectedAtMs <= maxAgeMs) {
@@ -87,6 +88,7 @@ export function createRenderMonitorService(api: OpenClawPluginApi): OpenClawPlug
         }
         const nowMs = Date.now();
         state = pruneState({ state, nowMs, dedupeTtlMinutes: cfgResolved.dedupeTtlMinutes });
+        state = pruneExpiredMutes({ state, nowMs });
 
         for (const service of cfgResolved.services) {
           let snapshot: RenderServiceSnapshot;
@@ -195,19 +197,26 @@ export function createRenderMonitorService(api: OpenClawPluginApi): OpenClawPlug
             }
 
             const refreshed = resolveIncidentById(state, incidentId);
-            if (refreshed && refreshed.acknowledgedAtMs == null) {
+            const muted = isServiceMuted({
+              state,
+              serviceId: service.serviceId,
+              incidentType: detected.incidentType,
+              nowMs,
+            });
+            if (refreshed && refreshed.acknowledgedAtMs == null && !muted) {
               const links = resolveRenderDashboardLinks(service.serviceId);
               const text = buildIncidentAlertText({
                 incident: { ...detected, fingerprint, incidentId },
                 incidentId,
                 service,
               });
-              const extra =
-                detected.incidentType === "deploy_failed" ? `\n\nRender deploy link: ${links.service}` : "";
+              const fullText = truncateForTelegram(
+                `${text}\n\nUseful links:\n- ${links.service}\n- ${links.logs}`,
+              );
               await sendTelegramAlert({
                 api,
                 chatId: cfgResolved.telegram.chatId,
-                text: `${text}\n\nUseful links:\n- ${links.service}\n- ${links.logs}${extra}`,
+                text: fullText,
               });
               state = markIncidentAlerted({ state, incidentId, alertedAtMs: nowMs });
             }

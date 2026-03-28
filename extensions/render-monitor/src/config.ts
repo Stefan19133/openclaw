@@ -95,14 +95,7 @@ function resolveServicesFallback(): RenderMonitorServiceTarget[] {
 export { renderMonitorConfigSchema };
 
 export function loadRenderMonitorConfig(api: OpenClawPluginApi): RenderMonitorConfigResolved {
-  const parsedFromConfig = (() => {
-    try {
-      return renderMonitorConfigSchema.parse(api.pluginConfig ?? {});
-    } catch {
-      // Keep runtime alive even if plugin config is corrupt.
-      return renderMonitorConfigSchema.parse({});
-    }
-  })();
+  const parsedFromConfig = (api.pluginConfig ?? {}) as Record<string, unknown>;
 
   const renderApiKey = resolveNonEmptyEnv("RENDER_API_KEY");
   const renderApiBaseUrl =

@@ -83,9 +83,8 @@ function extractAssistantTextFromMessages(messages: unknown[]): string {
         const b = block as Record<string, unknown>;
         if (b && typeof b.type === "string" && b.type === "text" && typeof b.text === "string") {
           blockTexts.push(b.text);
-        }
-        // Some transcripts may use { text } without explicit "type".
-        if (typeof b.text === "string") {
+        } else if (typeof b.text === "string") {
+          // Fallback for transcripts without explicit "type" field.
           blockTexts.push(b.text);
         }
       }
@@ -302,14 +301,22 @@ export async function applyRenderRemediation(params: {
     };
   }
 
-  let validated: ReturnType<typeof proposalSchema["parse"]>;
-  try {
-    validated = proposalSchema.parse(proposal);
-  } catch (err) {
+  type ProposalShape = {
+    proposal: {
+      repo: { repoPath: string; githubRepo: string; remote: string };
+      git: { baseBranch: string; deployBranch: string; newBranch: string };
+      commit: { message: string };
+      patchUnifiedDiff: string;
+    };
+    reasoning?: { hypothesis?: string; evidence?: string[]; verification?: string[] };
+  };
+
+  const validated = proposal as ProposalShape;
+  if (!validated?.proposal?.repo?.githubRepo || !validated?.proposal?.git?.newBranch || !validated?.proposal?.commit?.message) {
     return {
       ok: false,
-      summary: "Investigation proposal schema invalid",
-      error: `Type validation failed: ${String((err as Error)?.message ?? err)}`,
+      summary: "Investigation proposal missing required fields",
+      error: "Expected proposal.repo.githubRepo, proposal.git.newBranch, proposal.commit.message",
     };
   }
 
