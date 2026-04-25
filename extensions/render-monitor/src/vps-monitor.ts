@@ -220,6 +220,29 @@ function targetLabel(t: VpsTarget): string {
   return t.name ? `${t.name} (${t.host})` : t.host;
 }
 
+/**
+ * Patterns we deliberately ignore in journal output. These are recurring
+ * benign log lines (port scanners hitting sshd, expected probes from
+ * monitoring systems, etc.) that would otherwise spam Telegram.
+ *
+ * Match anywhere in the line, case-insensitive.
+ */
+const JOURNAL_NOISE_PATTERNS: RegExp[] = [
+  // SSH connection-attempt noise from port scanners hitting :22 — extremely
+  // common on any internet-facing VPS, never indicates a real problem.
+  /sshd\[.*kex_protocol_error/i,
+  /sshd\[.*kex_exchange_identification/i,
+  /sshd\[.*Connection reset by peer/i,
+  /sshd\[.*Connection closed by .* preauth/i,
+  /sshd\[.*Bad protocol version identification/i,
+  /sshd\[.*banner exchange/i,
+  /sshd\[.*invalid user/i,
+];
+
+function isNoiseLine(line: string): boolean {
+  return JOURNAL_NOISE_PATTERNS.some((re) => re.test(line));
+}
+
 /** Fetch recent error-priority journal entries. Falls back to syslog grep. */
 async function probeJournalErrors(
   target: VpsTarget,
@@ -234,7 +257,8 @@ async function probeJournalErrors(
   const lines = stdout
     .split("\n")
     .map((l) => l.trim())
-    .filter((l) => l.length > 15 && !l.startsWith("--") && !/^Hint:/.test(l));
+    .filter((l) => l.length > 15 && !l.startsWith("--") && !/^Hint:/.test(l))
+    .filter((l) => !isNoiseLine(l));
 
   const label = targetLabel(target);
   return lines.map((line) => {
@@ -252,6 +276,16 @@ async function probeJournalErrors(
   });
 }
 
+/**
+ * Systemd units we tolerate in `failed` state. cloud-init's final stage
+ * is a known false positive on most cloud images (it runs once at first
+ * boot and reports failed afterwards on some providers).
+ */
+const FAILED_UNIT_NOISE: string[] = [
+  "cloud-final.service",
+  "cloud-init.service",
+];
+
 /** List systemd units currently in failed state. */
 async function probeFailedUnits(target: VpsTarget): Promise<VpsAlert[]> {
   const cmd = `systemctl list-units --state=failed --no-legend --plain 2>/dev/null || true`;
@@ -259,7 +293,8 @@ async function probeFailedUnits(target: VpsTarget): Promise<VpsAlert[]> {
   const units = stdout
     .split("\n")
     .map((l) => l.trim())
-    .filter((l) => l.includes("failed") || l.includes(".service"));
+    .filter((l) => l.includes("failed") || l.includes(".service"))
+    .filter((l) => !FAILED_UNIT_NOISE.some((noise) => l.startsWith(noise)));
 
   if (units.length === 0) return [];
 
