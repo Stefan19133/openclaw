@@ -25,12 +25,19 @@ export class RenderClient {
   constructor(opts: RenderClientOptions) {
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? "https://api.render.com";
-    this.timeoutMs = opts.timeoutMs ?? 12_000;
+    // Default raised to 30s — the previous 12s caused frequent AbortErrors
+    // ("This operation was aborted") when polling slow endpoints like
+    // /v1/logs on busy services.
+    this.timeoutMs = opts.timeoutMs ?? 30_000;
   }
 
-  private async withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  private async withTimeout<T>(
+    fn: (signal: AbortSignal) => Promise<T>,
+    timeoutMs?: number,
+  ): Promise<T> {
+    const effectiveMs = timeoutMs ?? this.timeoutMs;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), effectiveMs);
     try {
       return await fn(controller.signal);
     } finally {
@@ -38,27 +45,49 @@ export class RenderClient {
     }
   }
 
-  private async requestJson<T>(path: string, query?: Record<string, string>): Promise<T> {
+  private async requestJson<T>(
+    path: string,
+    query?: Record<string, string>,
+    opts?: { timeoutMs?: number; retries?: number },
+  ): Promise<T> {
     const q =
       query && Object.keys(query).length > 0
         ? `?${new URLSearchParams(query).toString()}`
         : "";
     const url = `${this.baseUrl}${path}${q}`;
-    return await this.withTimeout(async (signal) => {
-      const res = await fetch(url, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        signal,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`render api request failed (${res.status}): ${body.slice(0, 600)}`);
+    const retries = opts?.retries ?? 0;
+
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await this.withTimeout(async (signal) => {
+          const res = await fetch(url, {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${this.apiKey}`,
+            },
+            signal,
+          });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            throw new Error(`render api request failed (${res.status}): ${body.slice(0, 600)}`);
+          }
+          return (await res.json()) as T;
+        }, opts?.timeoutMs);
+      } catch (err) {
+        lastErr = err;
+        // Retry only on abort/network errors, not on 4xx/5xx body errors.
+        const msg = String((err as Error)?.message ?? err);
+        const isTransient = msg.includes("aborted") || msg.includes("ECONNRESET") || msg.includes("fetch failed");
+        if (attempt < retries && isTransient) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          continue;
+        }
+        throw err;
       }
-      return (await res.json()) as T;
-    });
+    }
+    throw lastErr;
   }
 
   async getService(serviceId: string): Promise<RenderServiceSnapshot> {
@@ -128,15 +157,21 @@ export class RenderClient {
     };
     type LogsResponse = { logs?: LogEntry[] };
 
-    const result = await this.requestJson<LogsResponse>("/v1/logs", {
-      ownerId: params.ownerId,
-      resource: params.serviceId,
-      level: "error",
-      type: "app",
-      limit: String(params.limit ?? 10),
-      startTime: params.sinceIso,
-      direction: "backward",
-    });
+    // /v1/logs is notably slower than /v1/services on busy projects.
+    // Use a longer timeout (45s) and one retry on transient abort/network errors.
+    const result = await this.requestJson<LogsResponse>(
+      "/v1/logs",
+      {
+        ownerId: params.ownerId,
+        resource: params.serviceId,
+        level: "error",
+        type: "app",
+        limit: String(params.limit ?? 10),
+        startTime: params.sinceIso,
+        direction: "backward",
+      },
+      { timeoutMs: 45_000, retries: 1 },
+    );
 
     return (result.logs ?? []).map((entry) => ({
       message: entry.message ?? "",
