@@ -237,6 +237,17 @@ const JOURNAL_NOISE_PATTERNS: RegExp[] = [
   /sshd\[.*Bad protocol version identification/i,
   /sshd\[.*banner exchange/i,
   /sshd\[.*invalid user/i,
+  // Throttling kicked in due to a burst of preauth scanners. Operational
+  // info, not a real failure.
+  /sshd\[.*MaxStartups throttling/i,
+  /sshd\[.*beginning MaxStartups/i,
+  /sshd\[.*exiting MaxStartups/i,
+  // Other benign sshd preauth chatter: client closed mid-handshake,
+  // unsupported algorithms, etc.
+  /sshd\[.*ssh_dispatch_run_fatal/i,
+  /sshd\[.*no matching (?:host key type|key exchange method|cipher|MAC) found/i,
+  /sshd\[.*userauth_pubkey: parse publickey packet/i,
+  /sshd\[.*fatal: Timeout before authentication/i,
 ];
 
 function isNoiseLine(line: string): boolean {
