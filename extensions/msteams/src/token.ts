@@ -23,11 +23,17 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   const appId =
     normalizeSecretInputString(cfg?.appId) ||
     normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
-  const appPassword =
-    normalizeResolvedSecretInputString({
+  // Plaintext and env must win before SecretRef: sync path cannot resolve refs, and
+  // normalizeResolvedSecretInputString throws for unresolved Ref objects.
+  const appPasswordPlain = normalizeSecretInputString(cfg?.appPassword);
+  const appPasswordEnv = normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+  let appPassword = appPasswordPlain || appPasswordEnv;
+  if (!appPassword) {
+    appPassword = normalizeResolvedSecretInputString({
       value: cfg?.appPassword,
       path: "channels.msteams.appPassword",
-    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+    });
+  }
   const tenantId =
     normalizeSecretInputString(cfg?.tenantId) ||
     normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);

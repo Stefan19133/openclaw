@@ -53,6 +53,20 @@ describe("resolveMSTeamsCredentials", () => {
       }),
     ).toThrow(/channels\.msteams\.appPassword: unresolved SecretRef/i);
   });
+
+  it("resolves appPassword from env when config holds a SecretRef", () => {
+    process.env.MSTEAMS_APP_PASSWORD = "from-env-secret"; // pragma: allowlist secret
+    const resolved = resolveMSTeamsCredentials({
+      appId: "app-id",
+      appPassword: {
+        source: "env",
+        provider: "default",
+        id: "MSTEAMS_APP_PASSWORD",
+      },
+      tenantId: "tenant-id",
+    });
+    expect(resolved?.appPassword).toBe("from-env-secret");
+  });
 });
 
 describe("hasConfiguredMSTeamsCredentials", () => {
