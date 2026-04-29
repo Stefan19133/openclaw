@@ -1,43 +1,67 @@
 #!/usr/bin/env python3
-"""Patch openclaw 2026.4.x bundled-runtime-root to fix the mirror re-stage loop.
+"""Patch openclaw 2026.4.x bundled-runtime-root to reduce mirror re-stage thrashing.
 
-Bug:
+Bug investigated:
   ``materializeBundledRuntimeMirrorDistFile`` in
   ``/usr/lib/node_modules/openclaw/dist/bundled-runtime-root-*.js`` uses
   ``fs.realpathSync(src) === fs.realpathSync(dst)`` to detect "already
   materialized". This check is wrong for hard links: ``realpathSync`` returns
   the path you passed in (not the source path), so for hard-linked targets
-  the equality is never true. Worse, on hosts where ``protected_hardlinks=1``
+  the equality is never true. On hosts where ``protected_hardlinks=1``
   (Linux default) the unprivileged gateway user cannot hardlink files owned
-  by root, so ``fs.linkSync`` fails and the function falls back to
+  by root either, so ``fs.linkSync`` fails and the function falls back to
   ``fs.copyFileSync`` — which does not preserve mtime, so even a "same content"
-  check on (size, mtime) would never match. Result: every gateway boot
-  ``rmSync + copyFileSync`` ~1100 dist/*.js files, hammering the disk for
-  ~5 minutes during which msteams does not listen.
+  check on (size, mtime) would never match. Without the fix, every gateway
+  boot ``rmSync + copyFileSync`` ~1100 dist/*.js files, hammering the disk
+  for ~5 minutes during which msteams does not listen.
 
-Fix (two surgical edits, both required):
+What the patch fixes (4 surgical edits):
 
-  1. Replace the realpath-equality check with a layered idempotency check:
-       a) hardlink case: ``stat.dev`` + ``stat.ino`` equality
-       b) copy case:    ``stat.size`` + ``stat.mtimeMs`` equality
-     With (b), once mtime is propagated (see #2), subsequent boots skip.
+  1. Replace the realpath-equality check with a layered idempotency check
+     (stat.dev/ino + stat.size/mtimeMs).
+  2. After ``fs.copyFileSync`` in materializeBundledRuntimeMirrorDistFile,
+     propagate src.mtime to target via fs.utimesSync.
+  3. Same propagation in copyBundledPluginRuntimeRoot (different indent).
+  4. Inject ``__openclawPluginMirrorIsInSync`` and short-circuit
+     mirrorBundledPluginRuntimeRoot when the per-plugin mirror is already
+     in sync via a recursive size+mtime walk.
 
-  2. After ``fs.copyFileSync`` succeeds, propagate the source file's mtime to
-     the target via ``fs.utimesSync``. This makes the (size, mtime) check in
-     #1 true on subsequent boots, so the function early-returns without
-     rewriting.
+Measured impact on the SSJN VPS (1 vCPU / 4 GB / sda1 ext4, openclaw
+2026.4.26, 9 enabled plugins):
+
+  * Boot time: ~5 min  →  ~3 min (msteams listening on :3979)
+  * Disk write rate during boot: ~7000 kB/s sustained → ~119 kB/s
+  * Files re-written per boot in plugin-runtime-deps:  ~1106 → ~675
+
+Edits 1+2 (the dist/ materialization path) deliver the biggest measurable
+win — they eliminate the disk-throttling kernel D-state. Edits 3+4 (the
+per-plugin mirror short-circuit) are correct in isolation (the helper
+function returns ``true`` when called by hand on aligned mtimes) but the
+gateway still re-mirrors plugin trees at boot. The per-plugin re-mirror is
+no longer the dominant cost (small files, no kernel throttling), so the
+remaining ~3 min boot is now CPU-bound, not I/O-bound.
+
+The 3+4 path needs more upstream investigation: either ``mirrorBundledPlugin
+RuntimeRoot`` is being called multiple times per plugin per boot (only the
+first call would benefit from the guard), or another code path resets the
+mirror's mtime between calls. Logging instrumentation is needed in the
+bundle to confirm.
 
 Idempotent:
-  - "already patched" detected by presence of both new snippets
+  - "already patched" detected by presence of all four new forms
   - keeps a ``.bak`` of the original file on first run
-  - safe to wire up as a systemd ``ExecStartPre`` to re-apply across openclaw
-    upgrades
+  - re-running ``--check`` reports what would change
 
 Usage on the VPS (root needed since the file is under /usr/lib):
 
     sudo python3 vps-patch-runtime-mirror.py            # apply
     sudo python3 vps-patch-runtime-mirror.py --check    # verify-only, no write
     sudo python3 vps-patch-runtime-mirror.py --revert   # restore .bak
+
+After ``npm install -g openclaw@<x>`` the bundle is replaced; re-run the
+script to re-apply the patch. (Auto-reapplication via a systemd
+``ExecStartPre`` is feasible but requires a sudoers NOPASSWD rule, which is
+out of scope for this script.)
 """
 from __future__ import annotations
 
