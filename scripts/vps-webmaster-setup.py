@@ -174,6 +174,27 @@ def ensure_agents_md(dry_run: bool) -> None:
     log(f"wrote {AGENTS_MD}")
 
 
+PLUGINS_DISABLED_FOR_WEBMASTER: tuple[str, ...] = (
+    # The webmaster bot only needs acpx (agent runtime), msteams (channel),
+    # bonjour (mandatory advertising), and optionally telegram. The bundled
+    # plugins below are loaded by default but unused here, and each adds
+    # cold-start cost to the gateway boot AND the per-message dispatch.
+    "browser",
+    "device-pair",
+    "memory-core",
+    "phone-control",
+    "talk-voice",
+)
+
+
+def merge_plugin_entries(cfg: dict[str, Any]) -> None:
+    plugins = cfg.setdefault("plugins", {})
+    entries = plugins.setdefault("entries", {})
+    for name in PLUGINS_DISABLED_FOR_WEBMASTER:
+        entry = entries.setdefault(name, {})
+        entry["enabled"] = False
+
+
 def merge_agents(cfg: dict[str, Any]) -> None:
     agents = cfg.setdefault("agents", {})
 
@@ -389,6 +410,7 @@ def main() -> int:
     merge_agents(cfg)
     merge_bindings(cfg)
     merge_msteams(cfg)
+    merge_plugin_entries(cfg)
     write_config(cfg, dry_run=args.dry_run)
     ensure_agents_md(dry_run=args.dry_run)
     ensure_env_file(dry_run=args.dry_run)
