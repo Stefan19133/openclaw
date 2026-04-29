@@ -178,19 +178,24 @@ def merge_agents(cfg: dict[str, Any]) -> None:
     agents = cfg.setdefault("agents", {})
 
     defaults = agents.setdefault("defaults", {})
-    defaults["model"] = {
-        "primary": "anthropic/claude-haiku-4-5",
-        "fallbacks": ["anthropic/claude-sonnet-4-6"],
-    }
+    # Use Haiku 4.5 alone — Sonnet 4.6 fallback was actually slower than Haiku
+    # under timeout, so failover made the user-visible failure mode worse.
+    defaults["model"] = {"primary": "anthropic/claude-haiku-4-5"}
     defaults["thinkingDefault"] = "off"
     defaults["verboseDefault"] = "off"
     defaults["blockStreamingDefault"] = "off"
-    defaults["timeoutSeconds"] = 90
+    # 180s instead of 90s — pi-agent's multi-tool reasoning can chain several
+    # Haiku calls + REST round-trips, and the cap was triggering even on
+    # legitimate single-question turns.
+    defaults["timeoutSeconds"] = 180
     defaults["humanDelay"] = {"mode": "off"}
-    # If a previous run set a global blockStreamingCoalesce, drop it: with
-    # blockStreamingDefault=off it does nothing useful and keeps confusing the
-    # config audit.
+    # Skip openclaw's bootstrap (which would inline SOUL.md / USER.md / etc.
+    # into every prompt). The lean AGENTS.md alone is enough.
+    defaults["skipBootstrap"] = True
+    # Drop legacy keys we want to make sure aren't carried over from older runs.
     defaults.pop("blockStreamingCoalesce", None)
+    defaults.pop("contextTokens", None)
+    defaults.pop("compaction", None)
 
     agent_list = agents.setdefault("list", [])
     webmaster_entry = {
@@ -200,6 +205,11 @@ def merge_agents(cfg: dict[str, Any]) -> None:
         "workspace": str(AGENT_WORKSPACE),
         "agentDir": str(AGENT_DIR),
         "identity": {"name": "Rubis Webmaster IA"},
+        # Lean tool surface: only what the webmaster actually needs.
+        # `read/write/edit` for the local mirror, `exec` for curl (WP REST API)
+        # and sftp/lftp. Drops `web_search`, `web_fetch`, `browser`, `process`
+        # which add ~10 KB to the system prompt for no benefit here.
+        "tools": {"allow": ["read", "write", "edit", "exec"]},
     }
 
     # Replace any existing webmaster entry, preserve the rest.
