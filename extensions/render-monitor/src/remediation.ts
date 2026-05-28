@@ -239,12 +239,21 @@ export async function applyRenderRemediation(params: {
   service: RenderMonitorServiceTarget;
 }): Promise<RenderRemediationApplyResult> {
   const { api, config, incident, service } = params;
-  const telegramSend = api.runtime?.channel?.telegram?.sendMessageTelegram;
+  // openclaw 2026.4.x removed the legacy sendMessageTelegram path; use the
+  // outbound adapter API (see service.ts/vps-monitor.ts for the same pattern).
+  // Adapter is loaded lazily inside `send` so we only pay the cost when we
+  // actually need to emit a remediation status message.
   const chatId = config.telegram.chatId;
 
   const send = async (text: string) => {
-    if (!telegramSend || !chatId) return;
-    await telegramSend(chatId, text, { silent: false, textMode: "markdown" });
+    if (!chatId) return;
+    const adapter = await api.runtime?.channel?.outbound?.loadAdapter?.("telegram");
+    const sendText = adapter?.sendText;
+    if (!sendText) {
+      api.logger.warn?.("render-monitor: telegram outbound adapter unavailable; skipping remediation status update.");
+      return;
+    }
+    await sendText({ cfg: api.config, to: chatId, text: text.slice(0, 4096) });
   };
 
   if (!incident.lastInvestigation?.sessionKey || !incident.lastInvestigation?.runId) {
