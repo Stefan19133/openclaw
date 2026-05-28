@@ -24,7 +24,12 @@ function resolveDeployFailure(status?: string | null): boolean {
 function resolveServiceError(status?: string | null): boolean {
   const s = normalizeLower(status);
   if (!s) return false;
-  return ["error", "failed", "suspended"].some((needle) => s.includes(needle));
+  // Note: "suspended" is intentionally NOT treated as an error. Manual
+  // suspension via the Render dashboard is a deliberate operator action,
+  // not a failure to alert on. (Auto-suspension by Render for billing
+  // would still set suspended=true but that's an account-level problem,
+  // not a per-service incident worth paging on.)
+  return ["error", "failed"].some((needle) => s.includes(needle));
 }
 
 function resolveHttpFailure(url?: string): boolean {
