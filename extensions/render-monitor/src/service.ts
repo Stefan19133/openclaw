@@ -25,12 +25,19 @@ async function sendTelegramAlert(params: {
   chatId: string;
   text: string;
 }): Promise<void> {
-  const send = params.api.runtime?.channel?.telegram?.sendMessageTelegram;
+  // openclaw 2026.4.x removed the legacy
+  // `api.runtime.channel.telegram.sendMessageTelegram(chatId, text, opts)` path.
+  // The supported surface is now an outbound adapter loaded by channel id,
+  // which exposes `sendText({ cfg, to, text, accountId?, threadId? })`.
+  // Passing `cfg` is required — the adapter rejects calls without a resolved
+  // runtime config ("Telegram API context requires a resolved runtime config").
+  const adapter = await params.api.runtime?.channel?.outbound?.loadAdapter?.("telegram");
+  const send = adapter?.sendText;
   if (!send) {
-    params.api.logger.warn?.(`render-monitor: telegram runtime unavailable; skipping send.`);
+    params.api.logger.warn?.(`render-monitor: telegram outbound adapter unavailable; skipping send.`);
     return;
   }
-  await send(params.chatId, params.text, { silent: false, textMode: "markdown" });
+  await send({ cfg: params.api.config, to: params.chatId, text: params.text.slice(0, 4096) });
 }
 
 function pruneState(params: {
