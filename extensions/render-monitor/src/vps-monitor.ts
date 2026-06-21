@@ -255,6 +255,19 @@ const JOURNAL_NOISE_PATTERNS: RegExp[] = [
   /sshd\[.*no matching (?:host key type|key exchange method|cipher|MAC) found/i,
   /sshd\[.*userauth_pubkey: parse publickey packet/i,
   /sshd\[.*fatal: Timeout before authentication/i,
+  // Credential brute-force noise. Harmless on these hosts because password
+  // auth is disabled (PasswordAuthentication no) — every attempt is rejected
+  // regardless. A real compromise shows as "Accepted publickey", not these.
+  /sshd\[.*Failed password/i,
+  /sshd\[.*maximum authentication attempts (?:exceeded|reached)/i,
+  /sshd\[.*Too many authentication failures/i,
+  /sshd\[.*Disconnecting (?:authenticating|invalid) user/i,
+  /sshd\[.*Disconnected from (?:authenticating|invalid) user/i,
+  /sshd\[.*Received disconnect from .*\[preauth\]/i,
+  /sshd\[.*pam_unix\(sshd:auth\): authentication failure/i,
+  /sshd\[.*PAM .*authentication (?:failure|error)/i,
+  // Catch-all for any remaining sshd pre-authentication chatter.
+  /sshd\[.*\]:.*\[preauth\]/i,
 ];
 
 function isNoiseLine(line: string): boolean {
