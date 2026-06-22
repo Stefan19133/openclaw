@@ -266,6 +266,10 @@ const JOURNAL_NOISE_PATTERNS: RegExp[] = [
   /sshd\[.*Received disconnect from .*\[preauth\]/i,
   /sshd\[.*pam_unix\(sshd:auth\): authentication failure/i,
   /sshd\[.*PAM .*authentication (?:failure|error)/i,
+  // Old/garbage clients & scanners speaking the wrong SSH protocol version.
+  // Logged before identification completes (no [preauth] suffix, no source IP).
+  /sshd\[.*Protocol major versions differ/i,
+  /sshd\[.*Did not receive identification string/i,
   // Catch-all for any remaining sshd pre-authentication chatter.
   /sshd\[.*\]:.*\[preauth\]/i,
 ];
